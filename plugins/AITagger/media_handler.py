@@ -56,7 +56,11 @@ def get_tag_ids(tag_names):
 
 def get_tag_id(tag_name):
     if tag_name not in tagid_mappings:
-        return stash.find_tag(tag_name)["id"]
+        stashtag = stash.find_tag(tag_name)
+        if stashtag:
+            return stashtag["id"]
+        else:
+            log.error(f"Tag {tag_name} not found in Stash")
     return tagid_mappings.get(tag_name)
 
 def get_tag_threshold(tag_name):
@@ -186,7 +190,7 @@ def get_max_gap(tag_name):
 
 def add_markers_to_video(video_id, tag_id, tag_name, time_frames):
     for time_frame in time_frames:
-        stash.create_scene_marker({"scene_id": video_id, "primary_tag_id":tag_id, "tag_ids": [tag_id], "seconds": time_frame.start, "title":tagname_mappings[tag_name]})
+        stash.create_scene_marker({"scene_id": video_id, "primary_tag_id":tag_id, "tag_ids": [tag_id], "seconds": time_frame.start, "end_seconds": time_frame.end, "title":tagname_mappings[tag_name]})
 
 def remove_ai_markers_from_video(video_id):
     ai_tags = set(tagid_mappings.values())
