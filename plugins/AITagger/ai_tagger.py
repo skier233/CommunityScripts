@@ -49,9 +49,9 @@ try:
     except ModuleNotFoundError:
         log.error("Please provide a config.py file with the required variables.")
         raise Exception("Please provide a config.py file with the required variables.")
-    from ai_video_result import AIVideoResult
     import media_handler
     import ai_server
+    import utility
 except:
     log.error("Attempted to install required packages, please retry the task.")
     sys.exit(1)
@@ -129,13 +129,7 @@ async def tag_scenes():
 async def __tag_images(images):
     async with semaphore:
         imagePaths, imageIds, temp_files = media_handler.get_image_paths_and_ids(images)
-        mutated_image_paths = []
-        for path in imagePaths:
-            mutated_path = path
-            for key, value in config.path_mutation.items():
-                mutated_path = mutated_path.replace(key, value)
-            mutated_image_paths.append(mutated_path)
-        imagePaths = mutated_image_paths
+        imagePaths = [utility.mutate_path(path) for path in imagePaths]
         try:
             server_result = await ai_server.process_images_async(imagePaths)
             if server_result is None:
@@ -149,15 +143,19 @@ async def __tag_images(images):
                 log.error("Server returned incorrect number of results")
                 media_handler.add_error_images(imageIds)
             else:
+                media_handler.remove_ai_tags_from_images(imageIds, remove_tagme=False)
+
                 for id, result in zip(imageIds, results):
                     if 'error' in result:
                         log.error(f"Error processing image: {result['error']}")
                         media_handler.add_error_images([id])
                     else:
-                        tags = media_handler.get_all_tags_from_server_result(result)
-                        stashtag_ids = media_handler.get_tag_ids(tags)
-                        stashtag_ids.append(media_handler.ai_tagged_tag_id)
-                        media_handler.add_tags_to_image(id, stashtag_ids)
+                        tags_list = []
+                        for _, tags in result.items():
+                            stashtag_ids = media_handler.get_tag_ids(tags)
+                            stashtag_ids.append(media_handler.ai_tagged_tag_id)
+                            tags_list.extend(stashtag_ids)
+                        media_handler.add_tags_to_image(id, tags_list)
 
             log.info(f"Tagged {len(imageIds)} images")
             media_handler.remove_tagme_tags_from_images(imageIds)
@@ -180,86 +178,64 @@ async def __tag_images(images):
                 except Exception as e:
                     log.debug(f"Failed to remove temp file {temp_file}: {e}")
 
-# ----------------- Scene Processing -----------------
 
+# ----------------- Scene Processing -----------------
 async def __tag_scene(scene):
     async with semaphore:
         scenePath = scene['files'][0]['path']
-        mutated_path = scenePath
-        for key, value in config.path_mutation.items():
-            mutated_path = mutated_path.replace(key, value)
         sceneId = scene['id']
-        log.debug("files result:" + str(scene['files'][0]))
-        phash = scene['files'][0].get('fingerprint', None)
         duration = scene['files'][0].get('duration', None)
+        log.debug("files result:" + str(scene['files'][0]))
         if duration is None:
             log.error(f"Scene {sceneId} has no duration")
             return
+
+        mutated_path = utility.mutate_path(scenePath)
+
         try:
             already_ai_tagged = media_handler.is_scene_tagged(scene.get('tags'))
             ai_file_path = scenePath + ".AI.json"
-            ai_video_result = None
+            saved_json = None
             if already_ai_tagged:
                 if os.path.exists(ai_file_path):
                     try:
-                        ai_video_result = AIVideoResult.from_json_file(ai_file_path)
-                        current_pipeline_video = await ai_server.get_current_video_pipeline()
-                        if ai_video_result.already_contains_model(current_pipeline_video):
-                            log.info(f"Skipping running AI for scene {scenePath} as it has already been processed with the same pipeline version and configuration. Updating tags and markers instead.")
-                            ai_video_result.update_stash_tags()
-                            ai_video_result.update_stash_markers()
-                            return
+                        saved_json = utility.read_json_from_file(ai_file_path)
                     except Exception as e:
                         log.error(f"Failed to load AI results from file: {e}")
-                elif os.path.exists(os.path.join(os.path.dirname(scenePath), os.path.splitext(os.path.basename(scenePath))[0] + f"__vid_giddy__1.0.csv")):
-                    ai_video_result = AIVideoResult.from_csv_file(os.path.join(os.path.dirname(scenePath), os.path.splitext(os.path.basename(scenePath))[0] + f"__vid_giddy__1.0.csv"), scene_id=sceneId, phash=phash, duration=duration)
-                    log.info(f"Loading AI results from CSV file for scene {scenePath}")
-                    current_pipeline_video = await ai_server.get_current_video_pipeline()
-                    if ai_video_result.already_contains_model(current_pipeline_video):
-                        log.info(f"Skipping running AI for scene {scenePath} as it has already been processed with the same pipeline version and configuration. Updating tags and markers instead.")
-                        ai_video_result.to_json_file(ai_file_path)
-                        ai_video_result.update_stash_tags()
-                        ai_video_result.update_stash_markers()
-                        return
-                elif os.path.exists(os.path.join(os.path.dirname(scenePath), os.path.splitext(os.path.basename(scenePath))[0] + f"__actiondetection__1.0.csv")):
-                    ai_video_result = AIVideoResult.from_csv_file(os.path.join(os.path.dirname(scenePath), os.path.splitext(os.path.basename(scenePath))[0] + f"__actiondetection__1.0.csv"), scene_id=sceneId, phash=phash, duration=duration, version=1.0)
-                    log.info(f"Loading AI results from CSV file for scene {scenePath}")
-                    current_pipeline_video = await ai_server.get_current_video_pipeline()
-                    if ai_video_result.already_contains_model(current_pipeline_video):
-                        log.info(f"Skipping running AI for scene {scenePath} as it has already been processed with the same pipeline version and configuration. Updating tags and markers instead.")
-                        ai_video_result.to_json_file(ai_file_path)
-                        ai_video_result.update_stash_tags()
-                        ai_video_result.update_stash_markers()
-                        return
-                elif os.path.exists(os.path.join(os.path.dirname(scenePath), os.path.splitext(os.path.basename(scenePath))[0] + f"__actiondetection__2.0.csv")):
-                    ai_video_result = AIVideoResult.from_csv_file(os.path.join(os.path.dirname(scenePath), os.path.splitext(os.path.basename(scenePath))[0] + f"__actiondetection__2.0.csv"), scene_id=sceneId, phash=phash, duration=duration, version=2.0)
-                    log.info(f"Loading AI results from CSV file for scene {scenePath}")
-                    current_pipeline_video = await ai_server.get_current_video_pipeline()
-                    if ai_video_result.already_contains_model(current_pipeline_video):
-                        log.info(f"Skipping running AI for scene {scenePath} as it has already been processed with the same pipeline version and configuration. Updating tags and markers instead.")
-                        ai_video_result.to_json_file(ai_file_path)
-                        ai_video_result.update_stash_tags()
-                        ai_video_result.update_stash_markers()
-                        return
                 else:
                     log.warning(f"Scene {scenePath} is already tagged but has no AI results file. Running AI again.")
             vr_video = media_handler.is_vr_scene(scene.get('tags'))
             if vr_video:
                 log.info(f"Processing VR video {scenePath}")
-            server_result = await ai_server.process_video_async(video_path=mutated_path, vr_video=vr_video)
+            server_result = await ai_server.process_video_async(video_path=mutated_path, vr_video=vr_video, existing_json=saved_json)
+
             if server_result is None:
                 log.error("Server returned no results")
                 media_handler.add_error_scene(sceneId)
                 media_handler.remove_tagme_tag_from_scene(sceneId)
                 return
             server_result = ai_server.VideoResult(**server_result)
-            if ai_video_result:
-                ai_video_result.add_server_response(server_result)
-            else:
-                ai_video_result = AIVideoResult.from_server_response(server_result, sceneId, phash, duration)
-            ai_video_result.to_json_file(ai_file_path)
-            ai_video_result.update_stash_tags()
-            ai_video_result.update_stash_markers()
+
+            result = server_result.result
+            json_to_write = result['json_result']
+            if json_to_write:
+                utility.write_json_to_file(ai_file_path, json_to_write)
+            video_tag_info = ai_server.VideoTagInfo(**result['video_tag_info'])
+
+            media_handler.remove_ai_tags_from_video(sceneId, remove_tagme=True)
+            allTags = []
+            for _, tag_set in video_tag_info.video_tags.items():
+                allTags.extend(tag_set)
+            tagIdsToAdd = media_handler.get_tag_ids(allTags, create=True)
+            media_handler.add_tags_to_video(sceneId, tagIdsToAdd)
+
+            #TODO: find a good place to store total durations of tags in a video and ideally be able to query them and see them in stash's UI (via custom plugin db fields?)
+            todo = video_tag_info.tag_totals
+
+            if config.CREATE_MARKERS:
+                media_handler.remove_ai_markers_from_video(sceneId)
+                media_handler.add_markers_to_video_from_dict(sceneId, video_tag_info.tag_timespans)
+            log.info(f"Server Result: {server_result}")
             log.info(f"Processed video with {len(server_result.result)} AI tagged frames")
         except aiohttp.ClientConnectionError as e:
             log.error(f"Failed to connect to AI server. Is the AI server running at {config.API_BASE_URL}?   {e}")
@@ -272,7 +248,7 @@ async def __tag_scene(scene):
             return
         finally:
             increment_progress()
-    
+  
 # ----------------- Utility Functions -----------------
 
 def increment_progress():
