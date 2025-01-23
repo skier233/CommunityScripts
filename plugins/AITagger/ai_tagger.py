@@ -324,8 +324,7 @@ async def __tag_scene(scene):
             if config.CREATE_MARKERS:
                 media_handler.remove_ai_markers_from_video(sceneId)
                 media_handler.add_markers_to_video_from_dict(sceneId, video_tag_info.tag_timespans)
-            log.info(f"Server Result: {server_result}")
-            log.info(f"Processed video with {len(server_result.result)} AI tagged frames")
+            log.info(f"Tagged scene {scenePath}")
         except aiohttp.ClientConnectionError as e:
             log.error(f"Failed to connect to AI server. Is the AI server running at {config.API_BASE_URL}?   {e}")
         except asyncio.TimeoutError as a:
